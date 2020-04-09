@@ -73,25 +73,15 @@
       ignore_errors: True
       register: cpu
 
-#    - name: CPU check
-#      debug: msg="{% if HOST_MGMT5.stdout | regex_search('\d+') | int > 90 %}Good{% else %}CPU check{% endif %}"
-#      ignore_errors: True
-#      register: cpu
-
     - name: Port check
       shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Framing | awk '$2 > 100 {print "Port check"}'
       ignore_errors: True
+      register: TMP4
+
+    - name: Port result
+      debug: msg="{% if 'Port check' in TMP4.stdout %}Port check{% else %}OK{% endif %}"
       register: port
-
-#    - name: Port check
-#      debug: msg="{% if TMP4.stdout | regex_search('\d+') | int == 0 %}OK{% else %}Interface check{% endif %}"
-#      ignore_errors: True
-#      register: port
-
-#    - name: Port check
-#      debug: msg="{% if TMP4.stdout.find('\d+') | int < 100 %}OK{% else %}Interface check{% endif %}"
-#      ignore_errors: True
-#      register: port
+      ignore_errors: True
 
     - name: Gather_fact1
       junos_get_facts:
@@ -127,7 +117,7 @@
 
     - name: Result summary
       local_action:
-        copy content="{{hostname}}|{{inventory_hostname}}|{{model}}|{{serial}}|{{memory.stdout}}|{{cpu.stdout}}|{{module}}|{{power}}|{{fan}}|{{port.stdout}}|{{version}}|{{log}}|{{alarm}}\n"
+        copy content="{{hostname}}|{{inventory_hostname}}|{{model}}|{{serial}}|{{memory.stdout}}|{{cpu.stdout}}|{{module}}|{{power}}|{{fan}}|{{port}}|{{version}}|{{log}}|{{alarm}}\n"
         dest="Result/{{ lookup('pipe', 'date +%Y%m%d') }}/{{ inventory_hostname }}.txt"
 
     - name: Assemble from fragments from a directory
@@ -160,13 +150,13 @@
         regexp: "',"
         replace: ""
 
-    - name: Result modify4
+    - name: Result modify5
       replace:
         path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
         regexp: "{"
         replace: ""
 
-    - name: Result modify4
+    - name: Result modify6
       replace:
         path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
         regexp: "}"
