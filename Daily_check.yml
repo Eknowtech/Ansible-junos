@@ -5,8 +5,11 @@
     - Juniper.junos
   connection: local
   gather_facts: no
+# strategy: free
 
   tasks:
+
+##### 현재 날짜로 데이터 수집 폴더 생성
     - name: Make Config Backup Directory
       local_action:
         module: file
@@ -14,9 +17,12 @@
         state: directory
         mode: u=rwX,g=rX,o=rX
 
+##### 각 장비에 명령어 실행 후 생성된 폴더 안에 장비명.txt로 저장
     - name: Input Check CLI
       juniper_junos_command:
         commands:
+          - "show version"
+          - "show chassis hardware"
           - "show chassis routing-engine"
           - "show chassis environment"
           - "show system alarm"
@@ -24,90 +30,102 @@
           - "show log messages"
         dest: "Backup/{{ lookup('pipe', 'date +%Y%m%d') }}/{{ inventory_hostname}}.txt"
 
+##### Hostname 확인(shell에서 각 장비의 ‘Hostname’ 단어가 있는 행을 찾은 다음, 두번째 field를 %와 함께 출력)
+    - name: Hostname
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep 'Hostname:' | awk '{print $2; exit}'
+      ignore_errors: True
+      register: name
+
+##### Model 확인
+    - name: Model
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep 'Model:' | awk '{print $2; exit}'
+      ignore_errors: True
+      register: model
+
+##### Version 확인
+    - name: Version
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep 'Junos:' | awk '{print $2; exit}'
+      ignore_errors: True
+      register: version
+
+##### Serial 확인
+    - name: Serial
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep 'Chassis' | awk '{print $2; exit}'
+      ignore_errors: True
+      register: serial
+
+##### 각 장비명으로 저장된 raw data를 읽어들여 TMP1이라는 임시 버퍼에 저장
     - name: Read file1
       shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt
       register: TMP1
 
+##### 장비의 Alarm여부를 확인(TMP1에 저장된 내용 중 'No alarm currently active'가 존재할 경우 Good, 없을 경우 ALM check 메시지를 생성하여 alarm 버>퍼에 저장)
     - name: Alarm check
       debug: msg="{% if 'No alarms currently active' in TMP1.stdout %}Good{% else %}ALM check{% endif %}"
       register: alarm
       ignore_errors: True
 
-    - name: read file2
-      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt
-      ignore_errors: True
-      register: TMP2
-
+##### 장비의 전체적인 모듈 정상여부 확인(Alarm 확인과 동일한 방법으로 확인 후 module 버퍼에 저장
     - name: Module check
-      debug: msg="{% if 'Check' in TMP2.stdout %}Module check{% elif 'Absent' in TMP2.stdout %}Module check{% elif 'Present' in TMP2.stdout %}Module check{% else %}Good{% endif %}"
+      debug: msg="{% if 'Check' in TMP1.stdout %}Module check{% elif 'Absent' in TMP1.stdout %}Module check{% elif 'Present' in TMP1.stdout %}Module check{% else %}Good{% endif %}"
       ignore_errors: True
       register: module
 
-    - name: read file3
-      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Power
-      ignore_errors: True
-      register: TMP3
-
-    - name: Power check
-      debug: msg="{% if 'Check' in TMP3.stdout %}Power check{% elif 'Absent' in TMP3.stdout %}Power check{% elif 'Present' in TMP3.stdout %}Power check{% else %}Good{% endif %}"
-      ignore_errors: True
-      register: power
-
-    - name: read file2_2
-      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Fan
-      ignore_errors: True
-      register: TMP3
-
-    - name: FAN check
-      debug: msg="{% if 'Spinning at normal speed' in TMP3.stdout %}Good{% else %}FAN check{% endif %}"
-      ignore_errors: True
-      register: fan
-
-    - name: Memory check
-      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Memory | awk '{print $3"%"; exit}'
-      ignore_errors: True
-      register: memory
-
-    - name: CPU check
-      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Idle | awk '{print 100 - $2"%"; exit}'
-      ignore_errors: True
-      register: cpu
-
-    - name: Port check
-      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Framing | awk '$2 > 100 {print "Port check"}'
-      ignore_errors: True
-      register: TMP4
-
-    - name: Port result
-      debug: msg="{% if 'Port check' in TMP4.stdout %}Port check{% else %}OK{% endif %}"
-      register: port
-      ignore_errors: True
-
-    - name: Gather_fact1
-      junos_get_facts:
-      register: junos
-
-    - name: Print fact1
-      debug: msg="{{junos.facts.hostname}}"
-      register: hostname
-
-    - name: Print fact2
-      debug: msg="{{junos.facts.model}}"
-      register: model
-
-    - name: Print fact3
-      debug: msg="{{junos.facts.serialnumber}}"
-      register: serial
-
-    - name: Print fact4
-      debug: msg="{{junos.facts.version}}"
-      register: version
-
+##### 장비의 특이 Log 확인(Alarm 확인과 동일한 방법으로 확인 후 log 버퍼에 저장 / NMS에 등록되지 않은 log 위주로 지속적인 update 필요)
     - name: Log check
       debug: msg="{% if 'crash' in TMP1.stdout %}Log check{% elif 'license' in TMP1.stdout %}License check{% else %}None{% endif %}"
       register: log
       ignore_errors: True
 
+##### raw data에서 Power 부분만 발췌하여 TMP2 버퍼에 저장
+    - name: read file2
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Power
+      ignore_errors: True
+      register: TMP2
+
+##### 장비의 Power 상태 확인 후 power 버퍼에 저장
+    - name: Power check
+      debug: msg="{% if 'Check' in TMP2.stdout %}Power check{% elif 'Absent' in TMP2.stdout %}Power check{% elif 'Present' in TMP2.stdout %}Power check{% else %}Good{% endif %}"
+      ignore_errors: True
+      register: power
+
+##### raw data에서 Fan 부분만 발췌하여 TMP3 버퍼에 저장
+    - name: read file3
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Fan
+      ignore_errors: True
+      register: TMP3
+
+##### 장비의 Fan 상태 확인 후 fan 버퍼에 저장
+    - name: FAN check
+      debug: msg="{% if 'Spinning at normal speed' in TMP3.stdout %}Good{% else %}FAN check{% endif %}"
+      ignore_errors: True
+      register: fan
+
+##### 장비의 메모리 상태 확인 후 memory 버퍼에 저장(shell에서 각 장비의 'Memory' 단어가 있는 행을 찾은 다음, 세번째 field를 %와 함께 출력)
+    - name: Memory check
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Memory | awk '{print $3"%"; exit}'
+      ignore_errors: True
+      register: memory
+
+##### 장비의 CPU 상태 확인 후 cpu 버퍼에 저장(shell에서 각 장비의 'Idle' 단어가 있는 행을 찾은 다음, 100을 기준으로 두번째 field를 차감시킨 값을 %>와 함께 출력)
+    - name: CPU check
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Idle | awk '{print 100 - $2"%"; exit}'
+      ignore_errors: True
+      register: cpu
+
+##### 장비의 Port 상태 확인 후 TMP4 버퍼에 저장(shell에서 각 장비의 'Framing' 단어가 있는 행을 찾은 다음 두번째 field가 100보다 클 경우 'port check' 출력)
+    - name: Port check
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Framing | awk '$2 > 100 {print "Port check"}'
+      ignore_errors: True
+      register: TMP4
+
+##### TMP4에 저장된 port 상태 확인 후 결과를 port 버퍼에 저장
+    - name: Port result
+      debug: msg="{% if 'Port check' in TMP4.stdout %}Port check{% else %}OK{% endif %}"
+      register: port
+      ignore_errors: True
+
+##### 결과값을 저장할 폴더 생성
     - name: Make Result Directory
       local_action:
         module: file
@@ -115,55 +133,252 @@
         state: directory
         mode: u=rwX,g=rX,o=rX
 
+##### 생성된 폴더에 점검 결과에 대한 내용(버퍼)을 순차 기입(보고서 양식에 맞추기 위한 구분자 '|' 를 이용)
     - name: Result summary
       local_action:
-        copy content="{{hostname}}|{{inventory_hostname}}|{{model}}|{{serial}}|{{memory.stdout}}|{{cpu.stdout}}|{{module}}|{{power}}|{{fan}}|{{port}}|{{version}}|{{log}}|{{alarm}}\n"
+        copy content="{{name.stdout}}|{{inventory_hostname}}|{{model.stdout}}|{{serial.stdout}}|{{memory.stdout}}|{{cpu.stdout}}|{{module}}|{{power}}|{{fan}}|{{port}}|{{version.stdout}}|{{log}}|{{alarm}}\n"
         dest="Result/{{ lookup('pipe', 'date +%Y%m%d') }}/{{ inventory_hostname }}.txt"
 
+
+
+- name: Create local file
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  tasks:
+
+##### 각 장비 점검 결과가 위치한 폴더의 모든 text파일을 병합
     - name: Assemble from fragments from a directory
       assemble:
         src: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}"
-        dest: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
+        dest: "Result/Hynix_cj_summary.txt"
       ignore_errors: True
 
+##### 결과물 중 task 실행 간 발생한 불필요한 문자열 삭제
     - name: Result modify1
       replace:
-        path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
-        regexp: "'msg': u'"
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "'msg': '"
         replace: ""
 
     - name: Result modify2
       replace:
-        path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
-        regexp: "'skip_reason': u'Conditional result was False', 'skipped': True, 'changed': False"
-        replace: "skip"
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "'failed': False, 'changed': False"
+        replace: ""
 
     - name: Result modify3
       replace:
-        path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
-        regexp: "'failed': False, 'changed': False"
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "',"
         replace: ""
 
     - name: Result modify4
       replace:
-        path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
-        regexp: "',"
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "{"
         replace: ""
 
     - name: Result modify5
       replace:
-        path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
-        regexp: "{"
-        replace: ""
-
-    - name: Result modify6
-      replace:
-        path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
+        path: "Result/Hynix_cj_summary.txt"
         regexp: "}"
         replace: ""
 
-    - name: Read users from CSV file and return a list
-      copy:
-        src: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}_Result_summary.txt"
-        remote_src: yes
-        dest: "Result/ResultSUM.csv"
+##### 결과물 엑셀로 저장
+    - name: To excel
+      shell: python3 To_excel.py
+
+[root@ansible_113_10 ansible]# cat Hynix_cj.yml 
+---
+- name: Juniper switch check
+  hosts: Juniper
+  roles:
+    - Juniper.junos
+  connection: local
+  gather_facts: no
+# strategy: free
+
+  tasks:
+
+##### 현재 날짜로 데이터 수집 폴더 생성
+    - name: Make Config Backup Directory
+      local_action:
+        module: file
+        path: "Backup/{{ lookup('pipe', 'date +%Y%m%d') }}"
+        state: directory
+        mode: u=rwX,g=rX,o=rX
+
+##### 각 장비에 명령어 실행 후 생성된 폴더 안에 장비명.txt로 저장
+    - name: Input Check CLI
+      juniper_junos_command:
+        commands:
+          - "show version"
+          - "show chassis hardware"
+          - "show chassis routing-engine"
+          - "show chassis environment"
+          - "show system alarm"
+          - "show interfaces extensive"
+          - "show log messages"
+        dest: "Backup/{{ lookup('pipe', 'date +%Y%m%d') }}/{{ inventory_hostname}}.txt"
+
+##### Hostname 확인(shell에서 각 장비의 ‘Hostname’ 단어가 있는 행을 찾은 다음, 두번째 field를 %와 함께 출력)
+    - name: Hostname
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep 'Hostname:' | awk '{print $2; exit}'
+      ignore_errors: True
+      register: name
+
+##### Model 확인
+    - name: Model
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep 'Model:' | awk '{print $2; exit}'
+      ignore_errors: True
+      register: model
+
+##### Version 확인
+    - name: Version
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep 'Junos:' | awk '{print $2; exit}'
+      ignore_errors: True
+      register: version
+
+##### Serial 확인
+    - name: Serial
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep 'Chassis' | awk '{print $2; exit}'
+      ignore_errors: True
+      register: serial
+
+##### 각 장비명으로 저장된 raw data를 읽어들여 TMP1이라는 임시 버퍼에 저장
+    - name: Read file1
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt
+      register: TMP1
+
+##### 장비의 Alarm여부를 확인(TMP1에 저장된 내용 중 'No alarm currently active'가 존재할 경우 Good, 없을 경우 ALM check 메시지를 생성하여 alarm 버퍼에 저장)
+    - name: Alarm check
+      debug: msg="{% if 'No alarms currently active' in TMP1.stdout %}Good{% else %}ALM check{% endif %}"
+      register: alarm
+      ignore_errors: True
+
+##### 장비의 전체적인 모듈 정상여부 확인(Alarm 확인과 동일한 방법으로 확인 후 module 버퍼에 저장
+    - name: Module check
+      debug: msg="{% if 'Check' in TMP1.stdout %}Module check{% elif 'Absent' in TMP1.stdout %}Module check{% elif 'Present' in TMP1.stdout %}Module check{% else %}Good{% endif %}"
+      ignore_errors: True
+      register: module
+
+##### 장비의 특이 Log 확인(Alarm 확인과 동일한 방법으로 확인 후 log 버퍼에 저장 / NMS에 등록되지 않은 log 위주로 지속적인 update 필요)
+    - name: Log check
+      debug: msg="{% if 'crash' in TMP1.stdout %}Log check{% elif 'license' in TMP1.stdout %}License check{% else %}None{% endif %}"
+      register: log
+      ignore_errors: True
+
+##### raw data에서 Power 부분만 발췌하여 TMP2 버퍼에 저장
+    - name: read file2
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Power
+      ignore_errors: True
+      register: TMP2
+
+##### 장비의 Power 상태 확인 후 power 버퍼에 저장
+    - name: Power check
+      debug: msg="{% if 'Check' in TMP2.stdout %}Power check{% elif 'Absent' in TMP2.stdout %}Power check{% elif 'Present' in TMP2.stdout %}Power check{% else %}Good{% endif %}"
+      ignore_errors: True
+      register: power
+
+##### raw data에서 Fan 부분만 발췌하여 TMP3 버퍼에 저장
+    - name: read file3
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Fan
+      ignore_errors: True
+      register: TMP3
+
+##### 장비의 Fan 상태 확인 후 fan 버퍼에 저장
+    - name: FAN check
+      debug: msg="{% if 'Spinning at normal speed' in TMP3.stdout %}Good{% else %}FAN check{% endif %}"
+      ignore_errors: True
+      register: fan
+
+##### 장비의 메모리 상태 확인 후 memory 버퍼에 저장(shell에서 각 장비의 'Memory' 단어가 있는 행을 찾은 다음, 세번째 field를 %와 함께 출력)
+    - name: Memory check
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Memory | awk '{print $3"%"; exit}'
+      ignore_errors: True
+      register: memory
+
+##### 장비의 CPU 상태 확인 후 cpu 버퍼에 저장(shell에서 각 장비의 'Idle' 단어가 있는 행을 찾은 다음, 100을 기준으로 두번째 field를 차감시킨 값을 %와 함께 출력)
+    - name: CPU check
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Idle | awk '{print 100 - $2"%"; exit}'
+      ignore_errors: True
+      register: cpu
+
+##### 장비의 Port 상태 확인 후 TMP4 버퍼에 저장(shell에서 각 장비의 'Framing' 단어가 있는 행을 찾은 다음 두번째 field가 100보다 클 경우 'port check' 출력)
+    - name: Port check
+      shell: cat Backup/$(date +%Y%m%d)/{{ inventory_hostname }}.txt | grep Framing | awk '$2 > 100 {print "Port check"}'
+      ignore_errors: True
+      register: TMP4
+
+##### TMP4에 저장된 port 상태 확인 후 결과를 port 버퍼에 저장
+    - name: Port result
+      debug: msg="{% if 'Port check' in TMP4.stdout %}Port check{% else %}OK{% endif %}"
+      register: port
+      ignore_errors: True
+
+##### 결과값을 저장할 폴더 생성
+    - name: Make Result Directory
+      local_action:
+        module: file
+        path: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}"
+        state: directory
+        mode: u=rwX,g=rX,o=rX
+
+##### 생성된 폴더에 점검 결과에 대한 내용(버퍼)을 순차 기입(보고서 양식에 맞추기 위한 구분자 '|' 를 이용)
+    - name: Result summary
+      local_action:
+        copy content="{{name.stdout}}|{{inventory_hostname}}|{{model.stdout}}|{{serial.stdout}}|{{memory.stdout}}|{{cpu.stdout}}|{{module}}|{{power}}|{{fan}}|{{port}}|{{version.stdout}}|{{log}}|{{alarm}}\n"
+        dest="Result/{{ lookup('pipe', 'date +%Y%m%d') }}/{{ inventory_hostname }}.txt"
+
+
+
+- name: Create local file
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  tasks:
+
+##### 각 장비 점검 결과가 위치한 폴더의 모든 text파일을 병합
+    - name: Assemble from fragments from a directory
+      assemble:
+        src: "Result/{{ lookup('pipe', 'date +%Y%m%d') }}"
+        dest: "Result/Hynix_cj_summary.txt"
+      ignore_errors: True
+
+##### 결과물 중 task 실행 간 발생한 불필요한 문자열 삭제
+    - name: Result modify1
+      replace:
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "'msg': '"
+        replace: ""
+
+    - name: Result modify2
+      replace:
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "'failed': False, 'changed': False"
+        replace: ""
+
+    - name: Result modify3
+      replace:
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "',"
+        replace: ""
+
+    - name: Result modify4
+      replace:
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "{"
+        replace: ""
+
+    - name: Result modify5
+      replace:
+        path: "Result/Hynix_cj_summary.txt"
+        regexp: "}"
+        replace: ""
+
+##### 결과물 엑셀로 저장
+    - name: To excel
+      shell: python3 To_excel.py
